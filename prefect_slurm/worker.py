@@ -337,7 +337,7 @@ class SlurmWorker(
             matching_slurm_job_state = (
                 slurm_job_states[flow_run.infrastructure_pid]
                 if flow_run.infrastructure_pid in slurm_job_states
-                else None
+                else "UNKNOWN"
             )
 
             if matching_slurm_job_state == "UNKNOWN":

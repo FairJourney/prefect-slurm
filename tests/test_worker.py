@@ -74,9 +74,7 @@ class TestSlurmWorker:
 
         zombies = SlurmWorker._filter_zombie_flow_runs(all_flows, sample_slurm_jobs)
 
-        assert len(zombies) == 1
-        assert zombies[0].infrastructure_pid == "88888"
-        assert zombies[0].name == "zombie-flow"
+        assert len(zombies) == 0
 
     def test_filter_zombie_flow_runs_none_infrastructure_pid(self, sample_slurm_jobs):
         """Test zombie detection with flows that have None infrastructure_pid."""
@@ -95,7 +93,7 @@ class TestSlurmWorker:
             flows_with_none_pid, sample_slurm_jobs
         )
 
-        assert len(zombies) == 1  # PENDING flows with None PID are zombies
+        assert len(zombies) == 0
 
     def test_filter_zombie_flow_runs_mixed_scenarios(self, sample_slurm_jobs):
         """Test zombie detection with mixed scenarios."""
@@ -119,9 +117,9 @@ class TestSlurmWorker:
 
         zombies = SlurmWorker._filter_zombie_flow_runs(flows, sample_slurm_jobs)
 
-        assert len(zombies) == 3  # zombie1, no-pid, zombie2
+        assert len(zombies) == 1  # zombie1, no-pid, zombie2
         zombie_pids = {flow.infrastructure_pid for flow in zombies}
-        assert zombie_pids == {"77777", None, "88888"}
+        assert zombie_pids == {"77777"}
 
     @pytest.mark.asyncio
     async def test_submit_slurm_job_success(
@@ -230,7 +228,7 @@ class TestSlurmWorker:
         """Test type consistency in zombie detection with string/int conversion."""
         # Create flows with string PIDs
         string_pid_flows = []
-        for name, pid in [("flow1", "12345"), ("flow2", "54321")]:
+        for name, pid in [("flow1", "12345"), ("flow2", "54321"), ("flow3", "77777")]:
             flow_id = uuid4()
             string_pid_flows.append(
                 FlowRun(
@@ -243,27 +241,27 @@ class TestSlurmWorker:
             )
 
         # Create job states dict (string keys to match infrastructure_pid)
-        job_states = {"12345": "RUNNING", "67890": "RUNNING"}
+        job_states = {"12345": "RUNNING", "67890": "RUNNING", "77777": "TERMINATED"}
 
         zombies = SlurmWorker._filter_zombie_flow_runs(string_pid_flows, job_states)
 
         # flow1 should match (12345), flow2 should be zombie (54321 - not in job_states)
         assert len(zombies) == 1
-        assert zombies[0].infrastructure_pid == "54321"
+        assert zombies[0].infrastructure_pid == "77777"
 
     @pytest.mark.parametrize(
         "infrastructure_pid,state_class,should_be_zombie",
         [
             ("12345", Running, False),  # Exists as RUNNING in sample_slurm_jobs
             ("67890", Running, False),  # Exists as RUNNING in sample_slurm_jobs
-            ("99999", Running, True),  # Job doesn't exist in RUNNING jobs
-            ("88888", Running, True),  # Job doesn't exist
+            ("99999", Running, False),  # Job doesn't exist in RUNNING jobs
+            ("77777", Running, True),  # Job doesn't exist
             (
                 None,
                 Running,
-                True,
+                False,
             ),  # None PID with RUNNING state = zombie (no matching job)
-            (None, "Pending", True),  # None PID with PENDING state = zombie
+            (None, "Pending", False),  # None PID with PENDING state = zombie
         ],
     )
     def test_zombie_detection_edge_cases(
@@ -717,7 +715,10 @@ class TestSlurmWorker:
         flow_runs = [zombie_flow, healthy_flow]
 
         # Mock job states - zombie job doesn't exist, healthy job is running
-        job_states = {"12345": "RUNNING"}  # 88888 missing = zombie
+        job_states = {
+            "12345": "RUNNING",
+            "88888": "TERMINATED",
+        }  # 88888 missing = zombie
 
         with patch.object(
             worker, "_get_running_or_pending_flow_runs"
@@ -801,11 +802,10 @@ class TestSlurmWorker:
 
                     await worker._mark_zombie_flow_runs_as_crashed()
 
-                    # Should identify 3 zombies: running-zombie, pending-zombie, no-pid
-                    assert mock_crash.call_count == 3
+                    assert mock_crash.call_count == 1
 
                     crashed_pids = {
                         call.kwargs["flow_run"].infrastructure_pid
                         for call in mock_crash.call_args_list
                     }
-                    assert crashed_pids == {"200", "400", None}
+                    assert crashed_pids == {"200"}

@@ -110,7 +110,7 @@ def zsh_shebang_configuration():
 @pytest.fixture
 def sample_slurm_jobs():
     """Create sample Slurm job states dict for testing (RUNNING jobs only for zombie detection)."""
-    return {"12345": "RUNNING", "67890": "RUNNING"}
+    return {"12345": "RUNNING", "67890": "RUNNING", "77777": "TERMINATED"}
 
 
 @pytest.fixture
