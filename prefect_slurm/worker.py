@@ -12,6 +12,7 @@
 # limitations under the License.
 
 import importlib
+import os
 import threading
 from functools import partial
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
@@ -39,6 +40,7 @@ from prefect.settings import (
 )
 from prefect.utilities.services import critical_service_loop
 from prefect.workers.base import BaseWorker, BaseWorkerResult
+from tenacity import retry, stop_after_attempt, wait_fixed, wait_random
 
 from prefect_slurm.config import SlurmWorkerConfiguration, SlurmWorkerTemplateVariables
 from prefect_slurm.settings import WorkerSettings
@@ -46,6 +48,15 @@ from prefect_slurm.settings import WorkerSettings
 if TYPE_CHECKING:
     import slurpy.v0042.asyncio as slurpy
     from prefect.client.schemas import FlowRun
+
+MAX_ATTEMPTS = int(os.getenv("PREFECT_SLURM_MAX_ATTEMPTS", 3))
+RETRY_MIN_DELAY_SECONDS = int(os.getenv("PREFECT_SLURM_RETRY_MIN_DELAY_SECONDS", 10))
+RETRY_MIN_DELAY_JITTER_SECONDS = int(
+    os.getenv("PREFECT_SLURM_RETRY_MIN_DELAY_JITTER_SECONDS", 0)
+)
+RETRY_MAX_DELAY_JITTER_SECONDS = int(
+    os.getenv("PREFECT_SLURM_RETRY_MAX_DELAY_JITTER_SECONDS", 20)
+)
 
 
 class SlurmWorker(
@@ -430,6 +441,15 @@ class SlurmWorker(
             f"Ensure Slurm REST API is running and accessible at {self._settings.api_url}"
         )
 
+    @retry(
+        stop=stop_after_attempt(MAX_ATTEMPTS),
+        wait=wait_fixed(RETRY_MIN_DELAY_SECONDS)
+        + wait_random(
+            RETRY_MIN_DELAY_JITTER_SECONDS,
+            RETRY_MAX_DELAY_JITTER_SECONDS,
+        ),
+        reraise=True,
+    )
     async def _submit_slurm_job(self, job_spec: Dict[str, Any]):
         slurm_configuration = await self._get_slurm_configuration()
 
