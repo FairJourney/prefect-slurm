@@ -2,6 +2,8 @@
 Unit tests for SlurmWorker class methods.
 """
 
+import importlib
+import os
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
@@ -121,6 +123,59 @@ class TestSlurmWorker:
         zombie_pids = {flow.infrastructure_pid for flow in zombies}
         assert zombie_pids == {"77777"}
 
+    def test_retry_variables_default(self):
+        """Test default retry env vars"""
+        for key in [
+            "PREFECT_SLURM_MAX_ATTEMPTS",
+            "PREFECT_SLURM_RETRY_MIN_DELAY_SECONDS",
+            "PREFECT_SLURM_RETRY_MIN_DELAY_JITTER_SECONDS",
+            "PREFECT_SLURM_RETRY_MAX_DELAY_JITTER_SECONDS",
+        ]:
+            os.environ.pop(key, None)
+
+        import prefect_slurm.worker
+
+        importlib.reload(prefect_slurm.worker)
+
+        assert prefect_slurm.worker.MAX_ATTEMPTS == 3
+        assert prefect_slurm.worker.RETRY_MIN_DELAY_SECONDS == 10
+        assert prefect_slurm.worker.RETRY_MIN_DELAY_JITTER_SECONDS == 0
+        assert prefect_slurm.worker.RETRY_MAX_DELAY_JITTER_SECONDS == 20
+
+    @pytest.mark.parametrize(
+        "env_vars,expected",
+        [
+            (
+                {
+                    "PREFECT_SLURM_MAX_ATTEMPTS": "5",
+                    "PREFECT_SLURM_RETRY_MIN_DELAY_SECONDS": "15",
+                    "PREFECT_SLURM_RETRY_MIN_DELAY_JITTER_SECONDS": "5",
+                    "PREFECT_SLURM_RETRY_MAX_DELAY_JITTER_SECONDS": "30",
+                },
+                {"max": 5, "min_delay": 15, "min_jitter": 5, "max_jitter": 30},
+            ),
+        ],
+    )
+    def test_retry_variables_custom(self, env_vars, expected, monkeypatch):
+        """Test that custom environment variables are read correctly."""
+        for key, value in env_vars.items():
+            monkeypatch.setenv(key, value)
+
+        import prefect_slurm.worker
+
+        importlib.reload(prefect_slurm.worker)
+
+        assert prefect_slurm.worker.MAX_ATTEMPTS == expected["max"]
+        assert prefect_slurm.worker.RETRY_MIN_DELAY_SECONDS == expected["min_delay"]
+        assert (
+            prefect_slurm.worker.RETRY_MIN_DELAY_JITTER_SECONDS
+            == expected["min_jitter"]
+        )
+        assert (
+            prefect_slurm.worker.RETRY_MAX_DELAY_JITTER_SECONDS
+            == expected["max_jitter"]
+        )
+
     @pytest.mark.asyncio
     async def test_submit_slurm_job_success(
         self, sample_job_spec, mock_slurpy_response
@@ -158,10 +213,108 @@ class TestSlurmWorker:
             mock_api_client.return_value = mock_client
 
             with patch("slurpy.v0042.asyncio.SlurmApi", return_value=mock_api):
-                worker = SlurmWorker(work_pool_name="test-pool")
+                with patch("asyncio.sleep"):
+                    worker = SlurmWorker(work_pool_name="test-pool")
 
-                with pytest.raises(InfrastructureError):
-                    await worker._submit_slurm_job(sample_job_spec)
+                    with pytest.raises(InfrastructureError):
+                        await worker._submit_slurm_job(sample_job_spec)
+
+    @pytest.mark.asyncio
+    async def test_submit_slurm_job_retry_then_success(
+        self, sample_job_spec, mock_slurpy_response
+    ):
+        """Test job submission retries on ApiException then succeeds."""
+        with patch("slurpy.v0042.asyncio.ApiClient") as mock_api_client:
+            mock_client = AsyncMock()
+            mock_api = AsyncMock()
+
+            # Fail twice, then succeed
+            mock_api.post_job_submit.side_effect = [
+                ApiException("500: Server Error"),
+                ApiException("503: Service Unavailable"),
+                mock_slurpy_response,  # Success on 3rd attempt
+            ]
+
+            mock_client.__aenter__.return_value = mock_client
+            mock_client.__aexit__.return_value = None
+            mock_api_client.return_value = mock_client
+
+            with patch("slurpy.v0042.asyncio.SlurmApi", return_value=mock_api):
+                with patch("asyncio.sleep"):  # Speed up test
+                    worker = SlurmWorker(work_pool_name="test-pool")
+                    result = await worker._submit_slurm_job(sample_job_spec)
+
+            # Verify success after retries
+            assert result == mock_slurpy_response
+
+            # Verify 3 attempts were made
+            assert mock_api.post_job_submit.call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_submit_slurm_job_retry_exhausted(self, sample_job_spec):
+        """Test job submission fails after exhausting all retries."""
+        with patch("slurpy.v0042.asyncio.ApiClient") as mock_api_client:
+            mock_client = AsyncMock()
+            mock_api = AsyncMock()
+
+            # Always fail
+            mock_api.post_job_submit.side_effect = ApiException(
+                "500: Persistent Server Error"
+            )
+
+            mock_client.__aenter__.return_value = mock_client
+            mock_client.__aexit__.return_value = None
+            mock_api_client.return_value = mock_client
+
+            with patch("slurpy.v0042.asyncio.SlurmApi", return_value=mock_api):
+                with patch("asyncio.sleep"):  # Speed up test
+                    worker = SlurmWorker(work_pool_name="test-pool")
+
+                    # Should raise InfrastructureError after all retries
+                    with pytest.raises(InfrastructureError) as exc_info:
+                        await worker._submit_slurm_job(sample_job_spec)
+
+            # Verify MAX_ATTEMPTS (3) were made
+            import prefect_slurm.worker
+
+            importlib.reload(prefect_slurm.worker)
+
+            assert (
+                mock_api.post_job_submit.call_count == prefect_slurm.worker.MAX_ATTEMPTS
+            )
+
+            # Verify InfrastructureError wraps the ApiException
+            assert isinstance(exc_info.value.args[0], ApiException)
+
+    @pytest.mark.asyncio
+    async def test_submit_slurm_job_retry_on_generic_exception(
+        self, sample_job_spec, mock_slurpy_response
+    ):
+        """Test that generic exceptions are also retried."""
+        with patch("slurpy.v0042.asyncio.ApiClient") as mock_api_client:
+            mock_client = AsyncMock()
+            mock_api = AsyncMock()
+
+            # Fail with generic exception, then succeed
+            mock_api.post_job_submit.side_effect = [
+                ConnectionError("Network error"),
+                mock_slurpy_response,
+            ]
+
+            mock_client.__aenter__.return_value = mock_client
+            mock_client.__aexit__.return_value = None
+            mock_api_client.return_value = mock_client
+
+            with patch("slurpy.v0042.asyncio.SlurmApi", return_value=mock_api):
+                with patch("asyncio.sleep"):  # Speed up test
+                    worker = SlurmWorker(work_pool_name="test-pool")
+                    result = await worker._submit_slurm_job(sample_job_spec)
+
+            # Verify success after retry
+            assert result == mock_slurpy_response
+
+            # Verify exactly 2 attempts
+            assert mock_api.post_job_submit.call_count == 2
 
     @pytest.mark.asyncio
     async def test_run_method_success(

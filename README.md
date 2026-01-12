@@ -65,6 +65,10 @@ pip install prefect-slurm
 | `PREFECT_SLURM_TOKEN_FILE` | Path to token file | `~/.prefect_slurm.jwt` |
 | `PREFECT_SLURM_LOCK_TIMEOUT` | File lock timeout (seconds) | `60` |
 | `PREFECT_SLURM_ENV_FILE` | Override environment file path | Optional |
+| `PREFECT_SLURM_MAX_ATTEMPTS` | Max retries for requests to SLURM REST API | `3` |
+| `PREFECT_SLURM_RETRY_MIN_DELAY_SECONDS` | Min number of seconds between retry requests | `10` |
+| `PREFECT_SLURM_RETRY_MIN_DELAY_JITTER_SECONDS` | Min jitter to randomize delays | `0` |
+| `PREFECT_SLURM_RETRY_MAX_DELAY_JITTER_SECONDS` | Max jitter to randomize delays | `20` |
 
 ### Environment Files
 
