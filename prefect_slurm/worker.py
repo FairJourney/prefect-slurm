@@ -12,6 +12,7 @@
 # limitations under the License.
 
 import importlib
+import os
 import threading
 from functools import partial
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
@@ -48,10 +49,14 @@ if TYPE_CHECKING:
     import slurpy.v0042.asyncio as slurpy
     from prefect.client.schemas import FlowRun
 
-MAX_ATTEMPTS = 3
-RETRY_MIN_DELAY_SECONDS = 10
-RETRY_MIN_DELAY_JITTER_SECONDS = 0
-RETRY_MAX_DELAY_JITTER_SECONDS = 20
+MAX_ATTEMPTS = int(os.getenv("PREFECT_SLURM_MAX_ATTEMPTS", 3))
+RETRY_MIN_DELAY_SECONDS = int(os.getenv("PREFECT_SLURM_RETRY_MIN_DELAY_SECONDS", 10))
+RETRY_MIN_DELAY_JITTER_SECONDS = int(
+    os.getenv("PREFECT_SLURM_RETRY_MIN_DELAY_JITTER_SECONDS", 0)
+)
+RETRY_MAX_DELAY_JITTER_SECONDS = int(
+    os.getenv("PREFECT_SLURM_RETRY_MAX_DELAY_JITTER_SECONDS", 20)
+)
 
 
 class SlurmWorker(

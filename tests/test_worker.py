@@ -2,6 +2,8 @@
 Unit tests for SlurmWorker class methods.
 """
 
+import importlib
+import os
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
@@ -123,6 +125,59 @@ class TestSlurmWorker:
         zombie_pids = {flow.infrastructure_pid for flow in zombies}
         assert zombie_pids == {"77777", None, "88888"}
 
+    def test_retry_variables_default(self):
+        """Test default retry env vars"""
+        for key in [
+            "PREFECT_SLURM_MAX_ATTEMPTS",
+            "PREFECT_SLURM_RETRY_MIN_DELAY_SECONDS",
+            "PREFECT_SLURM_RETRY_MIN_DELAY_JITTER_SECONDS",
+            "PREFECT_SLURM_RETRY_MAX_DELAY_JITTER_SECONDS",
+        ]:
+            os.environ.pop(key, None)
+
+        import prefect_slurm.worker
+
+        importlib.reload(prefect_slurm.worker)
+
+        assert prefect_slurm.worker.MAX_ATTEMPTS == 3
+        assert prefect_slurm.worker.RETRY_MIN_DELAY_SECONDS == 10
+        assert prefect_slurm.worker.RETRY_MIN_DELAY_JITTER_SECONDS == 0
+        assert prefect_slurm.worker.RETRY_MAX_DELAY_JITTER_SECONDS == 20
+
+    @pytest.mark.parametrize(
+        "env_vars,expected",
+        [
+            (
+                {
+                    "PREFECT_SLURM_MAX_ATTEMPTS": "5",
+                    "PREFECT_SLURM_RETRY_MIN_DELAY_SECONDS": "15",
+                    "PREFECT_SLURM_RETRY_MIN_DELAY_JITTER_SECONDS": "5",
+                    "PREFECT_SLURM_RETRY_MAX_DELAY_JITTER_SECONDS": "30",
+                },
+                {"max": 5, "min_delay": 15, "min_jitter": 5, "max_jitter": 30},
+            ),
+        ],
+    )
+    def test_retry_variables_custom(self, env_vars, expected, monkeypatch):
+        """Test that custom environment variables are read correctly."""
+        for key, value in env_vars.items():
+            monkeypatch.setenv(key, value)
+
+        import prefect_slurm.worker
+
+        importlib.reload(prefect_slurm.worker)
+
+        assert prefect_slurm.worker.MAX_ATTEMPTS == expected["max"]
+        assert prefect_slurm.worker.RETRY_MIN_DELAY_SECONDS == expected["min_delay"]
+        assert (
+            prefect_slurm.worker.RETRY_MIN_DELAY_JITTER_SECONDS
+            == expected["min_jitter"]
+        )
+        assert (
+            prefect_slurm.worker.RETRY_MAX_DELAY_JITTER_SECONDS
+            == expected["max_jitter"]
+        )
+
     @pytest.mark.asyncio
     async def test_submit_slurm_job_success(
         self, sample_job_spec, mock_slurpy_response
@@ -222,9 +277,13 @@ class TestSlurmWorker:
                         await worker._submit_slurm_job(sample_job_spec)
 
             # Verify MAX_ATTEMPTS (3) were made
-            from prefect_slurm.worker import MAX_ATTEMPTS
+            import prefect_slurm.worker
 
-            assert mock_api.post_job_submit.call_count == MAX_ATTEMPTS
+            importlib.reload(prefect_slurm.worker)
+
+            assert (
+                mock_api.post_job_submit.call_count == prefect_slurm.worker.MAX_ATTEMPTS
+            )
 
             # Verify InfrastructureError wraps the ApiException
             assert isinstance(exc_info.value.args[0], ApiException)
