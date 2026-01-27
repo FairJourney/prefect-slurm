@@ -673,7 +673,11 @@ class TestSlurmWorker:
                 with patch.object(worker, "_SlurmApi", return_value=mock_api):
                     result = await worker._get_slurm_job_states(job_ids)
 
-                    expected = {"12345": "RUNNING", "67890": "COMPLETED", "99999": None}
+                    expected = {
+                        "12345": "RUNNING",
+                        "67890": "COMPLETED",
+                        "99999": "UNKNOWN",
+                    }
                     assert result == expected
 
                     # Verify the job_id query param formatting
@@ -871,7 +875,7 @@ class TestSlurmWorker:
         job_states = {
             "12345": "RUNNING",
             "88888": "TERMINATED",
-        }  # 88888 missing = zombie
+        }
 
         with patch.object(
             worker, "_get_running_or_pending_flow_runs"
