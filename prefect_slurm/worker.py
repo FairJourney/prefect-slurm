@@ -320,9 +320,9 @@ class SlurmWorker(
                 result = await response.json()
 
                 if not result.get("jobs", []):
-                    job_state = None
+                    job_state = "UNKNOWN"
                 elif not result["jobs"][0].get("state", []):
-                    job_state = None
+                    job_state = "UNKNOWN"
                 else:
                     job_state = result["jobs"][0]["state"][0]
             except self._ApiException as e:
