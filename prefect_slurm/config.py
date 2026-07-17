@@ -33,6 +33,7 @@ class SlurmWorkerConfiguration(BaseJobConfiguration):
     """
 
     cpu: int = Field(default=1, description="CPU count required for the flow")
+    gpu: int = Field(default=0, ge=0, description="Number of GPUs required for the flow")
     memory: int = Field(default=4, description="Memory in GB required for the flow")
     partition: Optional[str] = Field(default=None, description="Slurm partition to use")
     shebang: str = Field(
@@ -103,6 +104,7 @@ class SlurmWorkerConfiguration(BaseJobConfiguration):
                 current_working_directory=str(self.working_dir),
                 time_limit={"set": True, "number": self.time_limit * 60},
                 partition=self.partition,
+                tres_per_node=f"gres/gpu={self.gpu}" if self.gpu > 0 else None,
                 environment=self._env_to_list(),
             )
         )
@@ -142,6 +144,7 @@ class SlurmWorkerConfiguration(BaseJobConfiguration):
 
 class SlurmWorkerTemplateVariables(BaseVariables):
     cpu: int = Field(default=1, description="CPU count required for the flow")
+    gpu: int = Field(default=0, ge=0, description="Number of GPUs required for the flow")
     memory: int = Field(default=4, description="Memory in GB required for the flow")
     partition: Optional[str] = Field(default=None, description="Slurm partition to use")
     shebang: str = Field(
